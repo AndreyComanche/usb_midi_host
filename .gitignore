@@ -2,8 +2,5 @@
 /build
 /dist
 
-# SDK configuration
-/sdkconfig
-
 # Visual Studio Code settings
 .vscode/
