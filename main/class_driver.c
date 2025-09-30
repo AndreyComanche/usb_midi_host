@@ -18,7 +18,8 @@ typedef enum {
     ACTION_GET_DEV_DESC     = (1 << 2),
     ACTION_GET_CONFIG_DESC  = (1 << 3),
     ACTION_GET_STR_DESC     = (1 << 4),
-    ACTION_CLOSE_DEV        = (1 << 5),
+    ACTION_CLAIM_INTERFACE  = (1 << 5),
+    ACTION_CLOSE_DEV        = (1 << 6),
 } action_t;
 
 #define DEV_MAX_COUNT           128
@@ -28,6 +29,8 @@ typedef struct {
     uint8_t dev_addr;
     usb_device_handle_t dev_hdl;
     action_t actions;
+    usb_transfer_t *transfer;
+    uint8_t data_buffer[64];
 } usb_device_t;
 
 typedef struct {
@@ -51,6 +54,22 @@ typedef struct {
 
 static const char *TAG = "CLASS";
 static class_driver_t *s_driver_obj;
+
+static void midi_transfer_cb(usb_transfer_t *transfer)
+{
+    if (transfer->status == USB_TRANSFER_STATUS_COMPLETED) {
+        for (int i = 0; i < transfer->actual_num_bytes; i += 4) {
+            uint8_t cin = transfer->data_buffer[i] & 0x0F;
+            if (cin == 0x09 && transfer->data_buffer[i + 3] != 0) { // Note On
+                printf("Note On: Note=%d, Velocity=%d\n", transfer->data_buffer[i + 2], transfer->data_buffer[i + 3]);
+            } else if (cin == 0x08 || (cin == 0x09 && transfer->data_buffer[i + 3] == 0)) { // Note Off
+                printf("Note Off: Note=%d, Velocity=%d\n", transfer->data_buffer[i + 2], transfer->data_buffer[i + 3]);
+            }
+        }
+        // Resubmit the transfer
+        ESP_ERROR_CHECK(usb_host_transfer_submit(transfer));
+    }
+}
 
 static void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg)
 {
@@ -157,10 +176,32 @@ static void action_get_str_desc(usb_device_t *device_obj)
         ESP_LOGI(TAG, "Getting Serial Number string descriptor");
         usb_print_string_descriptor(dev_info.str_desc_serial_num);
     }
+    // Claim the interface next
+    device_obj->actions |= ACTION_CLAIM_INTERFACE;
+}
+
+static void action_claim_interface(usb_device_t *device_obj)
+{
+    assert(device_obj->dev_hdl != NULL);
+    ESP_LOGI(TAG, "Claiming MIDI interface");
+    ESP_ERROR_CHECK(usb_host_interface_claim(device_obj->client_hdl, device_obj->dev_hdl, 3, 0));
+
+    // Allocate a transfer
+    ESP_ERROR_CHECK(usb_host_transfer_alloc(64, 0, &device_obj->transfer));
+    device_obj->transfer->device_handle = device_obj->dev_hdl;
+    device_obj->transfer->bEndpointAddress = 0x82;
+    device_obj->transfer->callback = midi_transfer_cb;
+    device_obj->transfer->context = device_obj;
+    device_obj->transfer->num_bytes = 64;
+
+    // Submit the transfer
+    ESP_ERROR_CHECK(usb_host_transfer_submit(device_obj->transfer));
 }
 
 static void action_close_dev(usb_device_t *device_obj)
 {
+    ESP_ERROR_CHECK(usb_host_interface_release(device_obj->client_hdl, device_obj->dev_hdl, 3));
+    ESP_ERROR_CHECK(usb_host_transfer_free(device_obj->transfer));
     ESP_ERROR_CHECK(usb_host_device_close(device_obj->client_hdl, device_obj->dev_hdl));
     device_obj->dev_hdl = NULL;
     device_obj->dev_addr = 0;
@@ -187,6 +228,9 @@ static void class_driver_device_handle(usb_device_t *device_obj)
         if (actions & ACTION_GET_STR_DESC) {
             action_get_str_desc(device_obj);
         }
+        if (actions & ACTION_CLAIM_INTERFACE) {
+            action_claim_interface(device_obj);
+        }
         if (actions & ACTION_CLOSE_DEV) {
             action_close_dev(device_obj);
         }
@@ -198,7 +242,7 @@ static void class_driver_device_handle(usb_device_t *device_obj)
 
 void class_driver_task(void *arg)
 {
-    class_driver_t driver_obj = {0};
+    static class_driver_t driver_obj = {0};
     usb_host_client_handle_t class_driver_client_hdl = NULL;
 
     ESP_LOGI(TAG, "Registering Client");

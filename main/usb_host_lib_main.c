@@ -179,7 +179,7 @@ void app_main(void)
     assert(task_created == pdTRUE);
 
     // Wait until the USB host library is installed
-    ulTaskNotifyTake(false, 1000);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
     // Create class driver task
     task_created = xTaskCreatePinnedToCore(class_driver_task,
