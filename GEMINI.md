@@ -30,6 +30,16 @@ To configure the project, use the following command:
 idf.py menuconfig
 ```
 
+# Troubleshooting
+
+- **Device not detected:** If the device is not detected when connected to the USB OTG port, make sure that the jumper for the OTG port is closed on the board.
+
+# MIDI Handling
+
+The application is configured to handle MIDI messages from a connected USB MIDI device. It can parse and interpret the following messages:
+-   **Note On:** When a key is pressed, the application will print the note number and velocity.
+-   **Note Off:** When a key is released, the application will print the note number and a velocity of 0. A "Note On" message with a velocity of 0 is also interpreted as a "Note Off" message.
+
 # Development Conventions
 
 - The code follows the ESP-IDF C coding style.
